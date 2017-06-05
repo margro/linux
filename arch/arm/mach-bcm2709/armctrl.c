@@ -348,6 +348,10 @@ static struct irq_chip armctrl_chip = {
 	.irq_mask = armctrl_mask_irq,
 	.irq_unmask = armctrl_unmask_irq,
 	.irq_set_wake = armctrl_set_wake,
+#ifdef CONFIG_IPIPE
+	.irq_hold = armctrl_mask_irq,
+	.irq_release = armctrl_unmask_irq,
+#endif
 };
 
 /**

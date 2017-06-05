@@ -52,7 +52,11 @@
 	dsb
 	mov	r1, sp
 	adr	lr, BSYM(1b)
+#ifdef CONFIG_IPIPE
+	b	__ipipe_grab_ipi
+#else
 	b	do_IPI
+#endif
 #endif
 1030:
 	/* check gpu interrupt */
@@ -107,7 +111,11 @@
 	@ routine called with r0 = irq number, r1 = struct pt_regs *
 	@
 	adr	lr, BSYM(1b)
+#ifdef CONFIG_IPIPE
+	b	__ipipe_grab_irq
+#else
 	b	asm_do_IRQ
+#endif
 
 1020:	@ EQ will be set if no irqs pending
 	.endm

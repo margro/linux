@@ -334,12 +334,12 @@ void panic_if_irq_remap(const char *msg)
 
 static void ir_ack_apic_edge(struct irq_data *data)
 {
-	ack_APIC_irq();
+	__ack_APIC_irq();
 }
 
 static void ir_ack_apic_level(struct irq_data *data)
 {
-	ack_APIC_irq();
+	__ack_APIC_irq();
 	eoi_ioapic_irq(data->irq, irqd_cfg(data));
 }
 

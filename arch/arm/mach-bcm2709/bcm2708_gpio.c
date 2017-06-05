@@ -24,6 +24,7 @@
 #include <linux/pinctrl/consumer.h>
 
 #include <linux/platform_data/bcm2708.h>
+#include <linux/ipipe.h>
 
 #define BCM_GPIO_DRIVER_NAME "bcm2708_gpio"
 #define DRIVER_NAME BCM_GPIO_DRIVER_NAME
@@ -56,7 +57,8 @@ enum { GPIO_FSEL_INPUT, GPIO_FSEL_OUTPUT,
 	 * the GPIO code. This also makes the case of a GPIO routine call from
 	 * the IRQ code simpler.
 	 */
-static DEFINE_SPINLOCK(lock);	/* GPIO registers */
+static IPIPE_DEFINE_SPINLOCK(lock); /* GPIO registers */
+
 
 struct bcm2708_gpio {
 	struct list_head list;
@@ -294,7 +296,7 @@ static irqreturn_t bcm2708_gpio_interrupt(int irq, void *dev_id)
 			if (!(level_bits & (1<<i)))
 				writel(1<<i,
 				       __io_address(GPIO_BASE) + GPIOEDS(bank));
-			generic_handle_irq(gpio_to_irq(gpio));
+			ipipe_handle_demuxed_irq(gpio_to_irq(gpio));
 			/* ack level triggered IRQ after handling them */
 			if (level_bits & (1<<i))
 				writel(1<<i,

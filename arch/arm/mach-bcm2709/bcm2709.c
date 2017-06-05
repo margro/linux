@@ -1104,11 +1104,13 @@ static void __init bcm2709_timer_init(void)
 static void __init bcm2709_timer_init(void)
 {
 	extern void dc4_arch_timer_init(void);
+#ifndef CONFIG_IPIPE
 	// timer control
 	writel(0, __io_address(ARM_LOCAL_CONTROL));
 	// timer pre_scaler
 	writel(0x80000000, __io_address(ARM_LOCAL_PRESCALER)); // 19.2MHz
 	//writel(0x06AAAAAB, __io_address(ARM_LOCAL_PRESCALER)); // 1MHz
+#endif
 
 	if (use_dt)
 	{
@@ -1117,6 +1119,13 @@ static void __init bcm2709_timer_init(void)
 	}
 	else
 		dc4_arch_timer_init();
+
+#ifdef CONFIG_IPIPE
+	// timer control
+	writel(0, __io_address(ARM_LOCAL_CONTROL));
+	// timer pre_scaler
+	writel(0x80000000, __io_address(ARM_LOCAL_PRESCALER)); // 19.2MHz
+#endif
 }
 
 #endif
