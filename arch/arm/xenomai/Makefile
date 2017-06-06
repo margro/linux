@@ -1,1 +1,6 @@
-/media/pi/Linux/data/home/marcel/rpi3_xenomai2/xenomai-2.6.5/ksrc/arch/arm/Makefile
+obj-$(CONFIG_XENOMAI) += xeno_hal.o
+
+xeno_hal-y := hal.o switch.o
+
+EXTRA_CFLAGS += -D__IN_XENOMAI__ -Iinclude/xenomai
+

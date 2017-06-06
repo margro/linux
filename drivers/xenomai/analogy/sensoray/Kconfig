@@ -1,1 +1,5 @@
-/media/pi/Linux/data/home/marcel/rpi3_xenomai2/xenomai-2.6.5/ksrc/drivers/analogy/sensoray/Kconfig
+
+config XENO_DRIVERS_ANALOGY_S526
+	depends on XENO_DRIVERS_ANALOGY
+	tristate "Sensoray Model 526 driver"
+	default n

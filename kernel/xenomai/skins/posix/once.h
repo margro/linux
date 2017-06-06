@@ -1,1 +1,8 @@
-/media/pi/Linux/data/home/marcel/rpi3_xenomai2/xenomai-2.6.5/ksrc/skins/posix/once.h
+#ifndef _POSIX_ONCE_H
+#define _POSIX_ONCE_H
+
+int pse51_once_pkg_init(void);
+
+void pse51_once_pkg_cleanup(void);
+
+#endif /* _POSIX_ONCE_H */
