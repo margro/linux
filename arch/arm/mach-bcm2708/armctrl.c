@@ -24,6 +24,7 @@
 #include <linux/syscore_ops.h>
 #include <linux/interrupt.h>
 #include <linux/irqdomain.h>
+#include <linux/ipipe.h>
 #include <linux/of.h>
 
 #include <asm/mach/irq.h>
@@ -53,32 +54,66 @@ static void armctrl_mask_irq(struct irq_data *d)
 		ARM_IRQ_DIBL3,
 		0
 	};
+	unsigned long flags;
 
+	flags = hard_local_irq_save();
+	ipipe_lock_irq(d->irq);
+	
 	if (d->irq >= FIQ_START) {
 		writel(0, __io_address(ARM_IRQ_FAST));
 	} else {
 		unsigned int data = (unsigned int)irq_get_chip_data(d->irq);
 		writel(1 << (data & 0x1f), __io_address(disables[(data >> 5) & 0x3]));
 	}
+
+	hard_local_irq_restore(flags);
 }
+
+#ifdef CONFIG_IPIPE
+
+static void armctrl_mask_ack_irq(struct irq_data *d)
+{
+	static const unsigned int disables[] = {
+		ARM_IRQ_DIBL1,
+		ARM_IRQ_DIBL2,
+		ARM_IRQ_DIBL3,
+		0
+	};
+	unsigned int data;
+
+	if (d->irq >= FIQ_START)
+		writel(0, __io_address(ARM_IRQ_FAST));
+	else {
+		data = (unsigned int)irq_get_chip_data(d->irq);
+		writel(1 << (data & 0x1f), __io_address(disables[(data >> 5) & 0x3]));
+	}
+}
+
+#endif
 
 static void armctrl_unmask_irq(struct irq_data *d)
 {
-	static const unsigned int enables[4] = {
+	static const unsigned int enables[] = {
 		ARM_IRQ_ENBL1,
 		ARM_IRQ_ENBL2,
 		ARM_IRQ_ENBL3,
 		0
 	};
+	unsigned long flags;
+	unsigned int data;
+
+	flags = hard_local_irq_save();
 
 	if (d->irq >= FIQ_START) {
-		unsigned int data =
-		    (unsigned int)irq_get_chip_data(d->irq) - FIQ_START;
+		data = (unsigned int)irq_get_chip_data(d->irq) - FIQ_START;
 		writel(0x80 | data, __io_address(ARM_IRQ_FAST));
 	} else {
-		unsigned int data = (unsigned int)irq_get_chip_data(d->irq);
+		data = (unsigned int)irq_get_chip_data(d->irq);
 		writel(1 << (data & 0x1f), __io_address(enables[(data >> 5) & 0x3]));
 	}
+
+	ipipe_unlock_irq(d->irq);
+	hard_local_irq_restore(flags);
 }
 
 #ifdef CONFIG_OF
@@ -283,6 +318,9 @@ static struct irq_chip armctrl_chip = {
 	.irq_mask = armctrl_mask_irq,
 	.irq_unmask = armctrl_unmask_irq,
 	.irq_set_wake = armctrl_set_wake,
+#ifdef CONFIG_IPIPE
+	.irq_mask_ack = armctrl_mask_ack_irq,
+#endif
 };
 
 /**

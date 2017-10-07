@@ -16,6 +16,7 @@
 #include <linux/io.h>
 #include <linux/irq.h>
 #include <linux/interrupt.h>
+#include <linux/ipipe.h>
 #include <linux/slab.h>
 #include <mach/gpio.h>
 #include <linux/gpio.h>
@@ -56,7 +57,7 @@ enum { GPIO_FSEL_INPUT, GPIO_FSEL_OUTPUT,
 	 * the GPIO code. This also makes the case of a GPIO routine call from
 	 * the IRQ code simpler.
 	 */
-static DEFINE_SPINLOCK(lock);	/* GPIO registers */
+static IPIPE_DEFINE_SPINLOCK(lock);	/* GPIO registers */
 
 struct bcm2708_gpio {
 	struct list_head list;
@@ -87,8 +88,9 @@ static int bcm2708_set_function(struct gpio_chip *gc, unsigned offset,
 	gpiodir &= ~(7 << gpio_field_offset);
 	gpiodir |= function << gpio_field_offset;
 	writel(gpiodir, gpio->base + GPIOFSEL(gpio_bank));
-	spin_unlock_irqrestore(&lock, flags);
 	gpiodir = readl(gpio->base + GPIOFSEL(gpio_bank));
+
+	spin_unlock_irqrestore(&lock, flags);
 
 	return 0;
 }
@@ -146,9 +148,12 @@ int bcm2708_gpio_setpull(struct gpio_chip *gc, unsigned offset,
 	struct bcm2708_gpio *gpio = container_of(gc, struct bcm2708_gpio, gc);
 	unsigned gpio_bank = offset / 32;
 	unsigned gpio_field_offset = (offset - 32 * gpio_bank);
+	unsigned long flags;
 
 	if (offset >= BCM2708_NR_GPIOS)
 		return -EINVAL;
+
+	spin_lock_irqsave(&lock, flags); /* CAUTION: latency expected */
 
 	switch (value) {
 	case BCM2708_PULL_UP:
@@ -167,6 +172,8 @@ int bcm2708_gpio_setpull(struct gpio_chip *gc, unsigned offset,
 	udelay(5);
 	writel(0, gpio->base + GPIOUD(0));
 	writel(0 << gpio_field_offset, gpio->base + GPIOUDCLK(gpio_bank));
+
+	spin_unlock_irqrestore(&lock, flags);
 
 	return 0;
 }
@@ -216,17 +223,25 @@ static void bcm2708_gpio_irq_mask(struct irq_data *d)
 	struct bcm2708_gpio *gpio = irq_get_chip_data(irq);
 	unsigned gn = irq_to_gpio(irq);
 	unsigned gb = gn / 32;
-	unsigned long rising  = readl(gpio->base + GPIOREN(gb));
-	unsigned long falling = readl(gpio->base + GPIOFEN(gb));
-	unsigned long high    = readl(gpio->base + GPIOHEN(gb));
-	unsigned long low     = readl(gpio->base + GPIOLEN(gb));
+	unsigned long rising;
+	unsigned long falling;
+	unsigned long high;
+	unsigned long low;
+	unsigned long flags;
 
 	gn = gn % 32;
 
+	spin_lock_irqsave(&lock, flags);
+	ipipe_lock_irq(irq);
+	rising = readl(gpio->base + GPIOREN(gb));
+	falling = readl(gpio->base + GPIOFEN(gb));
+	high = readl(gpio->base + GPIOHEN(gb));
+	low = readl(gpio->base + GPIOLEN(gb));
 	writel(rising  & ~(1 << gn), gpio->base + GPIOREN(gb));
 	writel(falling & ~(1 << gn), gpio->base + GPIOFEN(gb));
 	writel(high    & ~(1 << gn), gpio->base + GPIOHEN(gb));
 	writel(low     & ~(1 << gn), gpio->base + GPIOLEN(gb));
+	spin_unlock_irqrestore(&lock, flags);
 }
 
 static void bcm2708_gpio_irq_unmask(struct irq_data *d)
@@ -236,10 +251,18 @@ static void bcm2708_gpio_irq_unmask(struct irq_data *d)
 	unsigned gn = irq_to_gpio(irq);
 	unsigned gb = gn / 32;
 	unsigned go = gn % 32;
-	unsigned long rising  = readl(gpio->base + GPIOREN(gb));
-	unsigned long falling = readl(gpio->base + GPIOFEN(gb));
-	unsigned long high    = readl(gpio->base + GPIOHEN(gb));
-	unsigned long low     = readl(gpio->base + GPIOLEN(gb));
+	unsigned long rising;
+	unsigned long falling;
+	unsigned long high;
+	unsigned long low;
+	unsigned long flags;
+
+	spin_lock_irqsave(&lock, flags);
+
+	rising = readl(gpio->base + GPIOREN(gb));
+	falling = readl(gpio->base + GPIOFEN(gb));
+	high = readl(gpio->base + GPIOHEN(gb));
+	low = readl(gpio->base + GPIOLEN(gb));
 
 	if (gpio->rising[gb] & (1 << go)) {
 		writel(rising |  (1 << go), gpio->base + GPIOREN(gb));
@@ -264,25 +287,18 @@ static void bcm2708_gpio_irq_unmask(struct irq_data *d)
 	} else {
 		writel(low & ~(1 << go), gpio->base + GPIOLEN(gb));
 	}
+
+	ipipe_unlock_irq(irq);
+	spin_unlock_irqrestore(&lock, flags);
 }
 
-static struct irq_chip bcm2708_irqchip = {
-	.name = "GPIO",
-	.irq_enable = bcm2708_gpio_irq_unmask,
-	.irq_disable = bcm2708_gpio_irq_mask,
-	.irq_unmask = bcm2708_gpio_irq_unmask,
-	.irq_mask = bcm2708_gpio_irq_mask,
-	.irq_set_type = bcm2708_gpio_irq_set_type,
-};
-
-static irqreturn_t bcm2708_gpio_interrupt(int irq, void *dev_id)
+static void do_gpio_interrupt(struct bcm2708_gpio *gpio_data)
 {
 	unsigned long edsr;
 	unsigned bank;
 	int i;
 	unsigned gpio;
 	unsigned level_bits;
-	struct bcm2708_gpio *gpio_data = dev_id;
 
 	for (bank = 0; bank < GPIO_BANKS; bank++) {
 		edsr = readl(__io_address(GPIO_BASE) + GPIOEDS(bank));
@@ -291,16 +307,60 @@ static irqreturn_t bcm2708_gpio_interrupt(int irq, void *dev_id)
 		for_each_set_bit(i, &edsr, 32) {
 			gpio = i + bank * 32;
 			/* ack edge triggered IRQs immediately */
-			if (!(level_bits & (1<<i)))
+			if (!IS_ENABLED(CONFIG_IPIPE) && !(level_bits & (1<<i)))
 				writel(1<<i,
 				       __io_address(GPIO_BASE) + GPIOEDS(bank));
-			generic_handle_irq(gpio_to_irq(gpio));
+			ipipe_handle_demuxed_irq(gpio_to_irq(gpio));
 			/* ack level triggered IRQ after handling them */
-			if (level_bits & (1<<i))
+			if (!IS_ENABLED(CONFIG_IPIPE) && (level_bits & (1<<i)) != 0)
 				writel(1<<i,
 				       __io_address(GPIO_BASE) + GPIOEDS(bank));
 		}
 	}
+}
+
+#ifdef CONFIG_IPIPE
+
+static void bcm2708_gpio_irq_mask_ack(struct irq_data *d)
+{
+	struct bcm2708_gpio *gpio_data = irq_get_chip_data(d->irq);
+	unsigned int gn = irq_to_gpio(d->irq);
+	unsigned int gb = gn / 32;
+	unsigned int go = gn % 32;
+	unsigned long rising;
+	unsigned long falling;
+	unsigned long high;
+	unsigned long low;
+	unsigned long flags;
+
+	spin_lock_irqsave(&lock, flags);
+	rising = readl(gpio_data->base + GPIOREN(gb));
+	falling = readl(gpio_data->base + GPIOFEN(gb));
+	high = readl(gpio_data->base + GPIOHEN(gb));
+	low = readl(gpio_data->base + GPIOLEN(gb));
+	writel(rising & ~(1 << go), gpio_data->base + GPIOREN(gb));
+	writel(falling & ~(1 << go), gpio_data->base + GPIOFEN(gb));
+	writel(high & ~(1 << go), gpio_data->base + GPIOHEN(gb));
+	writel(low & ~(1 << go), gpio_data->base + GPIOLEN(gb));
+	writel(1 << go, __io_address(GPIO_BASE) + GPIOEDS(gb));
+	spin_unlock_irqrestore(&lock, flags);
+}
+
+static void bcm2708_gpio_interrupt(unsigned int irq, struct irq_desc *desc)
+{
+	struct bcm2708_gpio *gpio_data = irq_get_handler_data(irq);
+
+	do_gpio_interrupt(gpio_data);
+}
+
+#else  /* CONFIG_IPIPE */
+
+static irqreturn_t bcm2708_gpio_interrupt(int irq, void *dev_id)
+{
+	struct bcm2708_gpio *gpio_data = dev_id;
+
+	do_gpio_interrupt(gpio_data);
+
 	return IRQ_HANDLED;
 }
 
@@ -308,6 +368,20 @@ static struct irqaction bcm2708_gpio_irq = {
 	.name = "BCM2708 GPIO catchall handler",
 	.flags = IRQF_TIMER | IRQF_IRQPOLL,
 	.handler = bcm2708_gpio_interrupt,
+};
+
+#endif	/* !CONFIG_IPIPE */
+
+static struct irq_chip bcm2708_irqchip = {
+	.name = "GPIO",
+#ifdef CONFIG_IPIPE
+	.irq_mask_ack = bcm2708_gpio_irq_mask_ack,
+#endif
+	.irq_enable = bcm2708_gpio_irq_unmask,
+	.irq_disable = bcm2708_gpio_irq_mask,
+	.irq_unmask = bcm2708_gpio_irq_unmask,
+	.irq_mask = bcm2708_gpio_irq_mask,
+	.irq_set_type = bcm2708_gpio_irq_set_type,
 };
 
 static void bcm2708_gpio_irq_init(struct bcm2708_gpio *ucb)
@@ -319,12 +393,19 @@ static void bcm2708_gpio_irq_init(struct bcm2708_gpio *ucb)
 	for (irq = GPIO_IRQ_START; irq < (GPIO_IRQ_START + GPIO_IRQS); irq++) {
 		irq_set_chip_data(irq, ucb);
 		irq_set_chip_and_handler(irq, &bcm2708_irqchip,
+					 IS_ENABLED(CONFIG_IPIPE) ?
+					 handle_level_irq :
 					 handle_simple_irq);
 		set_irq_flags(irq, IRQF_VALID);
 	}
 
+#ifdef CONFIG_IPIPE
+	irq_set_handler_data(IRQ_GPIO3, ucb);
+	irq_set_chained_handler(IRQ_GPIO3, bcm2708_gpio_interrupt);
+#else
 	bcm2708_gpio_irq.dev_id = ucb;
 	setup_irq(IRQ_GPIO3, &bcm2708_gpio_irq);
+#endif
 }
 
 #else
