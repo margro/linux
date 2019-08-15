@@ -2700,6 +2700,9 @@ static void __trace_hardirqs_on_caller(unsigned long ip)
 
 __visible void trace_hardirqs_on_caller(unsigned long ip)
 {
+	if (!ipipe_root_p)
+		return;
+
 	time_hardirqs_on(CALLER_ADDR0, ip);
 
 	if (unlikely(!debug_locks || current->lockdep_recursion))
@@ -2720,7 +2723,7 @@ __visible void trace_hardirqs_on_caller(unsigned long ip)
 	 * already enabled, yet we find the hardware thinks they are in fact
 	 * enabled.. someone messed up their IRQ state tracing.
 	 */
-	if (DEBUG_LOCKS_WARN_ON(!irqs_disabled()))
+	if (DEBUG_LOCKS_WARN_ON(!irqs_disabled() && !hard_irqs_disabled()))
 		return;
 
 	/*
@@ -2753,7 +2756,12 @@ EXPORT_SYMBOL(trace_hardirqs_on);
  */
 __visible void trace_hardirqs_off_caller(unsigned long ip)
 {
-	struct task_struct *curr = current;
+	struct task_struct *curr;
+
+	if (!ipipe_root_p)
+		return;
+
+	curr = current;
 
 	time_hardirqs_off(CALLER_ADDR0, ip);
 
@@ -2764,7 +2772,7 @@ __visible void trace_hardirqs_off_caller(unsigned long ip)
 	 * So we're supposed to get called after you mask local IRQs, but for
 	 * some reason the hardware doesn't quite think you did a proper job.
 	 */
-	if (DEBUG_LOCKS_WARN_ON(!irqs_disabled()))
+	if (DEBUG_LOCKS_WARN_ON(!irqs_disabled() && !hard_irqs_disabled()))
 		return;
 
 	if (curr->hardirqs_enabled) {
@@ -2800,7 +2808,7 @@ void trace_softirqs_on(unsigned long ip)
 	 * We fancy IRQs being disabled here, see softirq.c, avoids
 	 * funny state and nesting things.
 	 */
-	if (DEBUG_LOCKS_WARN_ON(!irqs_disabled()))
+	if (DEBUG_LOCKS_WARN_ON(!irqs_disabled() && !hard_irqs_disabled()))
 		return;
 
 	if (curr->softirqs_enabled) {
@@ -2839,7 +2847,7 @@ void trace_softirqs_off(unsigned long ip)
 	/*
 	 * We fancy IRQs being disabled here, see softirq.c
 	 */
-	if (DEBUG_LOCKS_WARN_ON(!irqs_disabled()))
+	if (DEBUG_LOCKS_WARN_ON(!irqs_disabled() && !hard_irqs_disabled()))
 		return;
 
 	if (curr->softirqs_enabled) {
