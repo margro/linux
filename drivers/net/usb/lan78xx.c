@@ -2217,6 +2217,12 @@ static int lan78xx_reset(struct lan78xx_net *dev)
 
 	ret = lan78xx_read_reg(dev, HW_CFG, &buf);
 	buf |= HW_CFG_MEF_;
+
+	/* If no valid EEPROM and no valid OTP, enable the LEDs by default */
+	if (lan78xx_read_eeprom(dev, 0, 0, NULL) &&
+	    lan78xx_read_otp(dev, 0, 0, NULL))
+	    buf |= HW_CFG_LED0_EN_ | HW_CFG_LED1_EN_;
+
 	ret = lan78xx_write_reg(dev, HW_CFG, buf);
 
 	ret = lan78xx_read_reg(dev, USB_CFG0, &buf);
@@ -2312,7 +2318,7 @@ static void lan78xx_init_stats(struct lan78xx_net *dev)
 	dev->stats.rollover_max.eee_tx_lpi_transitions = 0xFFFFFFFF;
 	dev->stats.rollover_max.eee_tx_lpi_time = 0xFFFFFFFF;
 
-	lan78xx_defer_kevent(dev, EVENT_STAT_UPDATE);
+	set_bit(EVENT_STAT_UPDATE, &dev->flags);
 }
 
 static int lan78xx_open(struct net_device *net)
