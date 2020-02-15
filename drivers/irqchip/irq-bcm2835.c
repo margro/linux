@@ -175,8 +175,13 @@ static struct irq_chip armctrl_chip = {
 	.irq_mask = armctrl_mask_irq,
 	.irq_unmask = armctrl_unmask_irq,
 #ifdef CONFIG_ARM64
-	.irq_ack    = armctrl_ack_irq
+	.irq_ack    = armctrl_ack_irq,
 #endif
+#ifdef CONFIG_IPIPE
+	.irq_hold = armctrl_mask_irq,
+	.irq_release = armctrl_unmask_irq,
+#endif
+	.flags	     = IRQCHIP_PIPELINE_SAFE,
 };
 
 static int armctrl_xlate(struct irq_domain *d, struct device_node *ctrlr,
@@ -330,7 +335,7 @@ static void __exception_irq_entry bcm2835_handle_irq(
 	u32 hwirq;
 
 	while ((hwirq = get_next_armctrl_hwirq()) != ~0)
-		handle_domain_irq(intc.domain, hwirq, regs);
+		ipipe_handle_domain_irq(intc.domain, hwirq, regs);
 }
 
 static void bcm2836_chained_handle_irq(struct irq_desc *desc)
@@ -338,7 +343,7 @@ static void bcm2836_chained_handle_irq(struct irq_desc *desc)
 	u32 hwirq;
 
 	while ((hwirq = get_next_armctrl_hwirq()) != ~0)
-		generic_handle_irq(irq_linear_revmap(intc.domain, hwirq));
+		ipipe_handle_demuxed_irq(irq_linear_revmap(intc.domain, hwirq));
 }
 
 IRQCHIP_DECLARE(bcm2835_armctrl_ic, "brcm,bcm2835-armctrl-ic",
